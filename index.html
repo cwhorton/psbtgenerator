@@ -1,0 +1,829 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PSBT Generator</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #ffffff; --text: #1c1f26; --muted: #5f6675; --border: #d9dde5;
+    --ok: #157347; --err: #b42318; --warn: #9a6700; --info: #0b5cad; --accent: #f7931a; --accent-text: #1c1f26;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14161b; --card: #1d2027; --text: #e8eaf0; --muted: #9aa3b2; --border: #333947;
+      --ok: #3ccb7f; --err: #ff6b5f; --warn: #e8b84a; --info: #6cb4ff; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 800px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  section { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 14px; }
+  section h2 { font-size: 15px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+  label { display: block; font-weight: 600; margin-bottom: 4px; }
+  .hint { color: var(--muted); font-size: 13px; margin: 0 0 6px; }
+  input[type=text] { width: 100%; padding: 9px 10px; font: 14px var(--mono); border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); }
+  input[type=text]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  input.ok { border-color: var(--ok); } input.err { border-color: var(--err); }
+  .status { font-size: 13px; margin-top: 5px; min-height: 18px; word-break: break-word; }
+  .status.ok { color: var(--ok); } .status.err { color: var(--err); } .status.warn { color: var(--warn); } .status.loading, .status.empty { color: var(--muted); }
+  .row { display: flex; gap: 8px; align-items: flex-start; }
+  .row > div { flex: 1; }
+  button { font: inherit; padding: 8px 14px; border-radius: 6px; border: 1px solid var(--border); background: var(--card); color: var(--text); cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; padding: 12px 20px; font-size: 16px; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.small { padding: 6px 10px; font-size: 13px; }
+  .utxo { margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px dashed var(--border); }
+  .utxo:last-of-type { border-bottom: 0; margin-bottom: 4px; }
+  .chains { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .chain { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; cursor: pointer; display: flex; gap: 10px; align-items: flex-start; }
+  .chain.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .chain input { margin-top: 4px; }
+  .chain b { display: block; }
+  .chain small { color: var(--muted); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .chips button { padding: 3px 9px; font-size: 12px; border-radius: 999px; font-family: var(--mono); }
+  .chips button.cur { border-color: var(--accent); }
+  .badge { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--accent); color: var(--accent-text); }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  td { padding: 4px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  td:first-child { color: var(--muted); width: 38%; }
+  td.num { font-family: var(--mono); text-align: right; }
+  .msg { padding: 8px 10px; border-radius: 6px; margin: 8px 0; font-size: 14px; }
+  .msg.err { background: color-mix(in srgb, var(--err) 12%, transparent); color: var(--err); }
+  .msg.warn { background: color-mix(in srgb, var(--warn) 14%, transparent); color: var(--warn); }
+  .msg.info { background: color-mix(in srgb, var(--info) 12%, transparent); color: var(--info); }
+  textarea { width: 100%; min-height: 120px; font: 12px var(--mono); border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); padding: 8px; resize: vertical; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+  code { font-family: var(--mono); font-size: 13px; }
+  @media (max-width: 560px) { .chains { grid-template-columns: 1fr; } .row { flex-direction: column; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>PSBT Generator</h1>
+  <p class="sub">Builds an unsigned PSBT for Sparrow Wallet, valid on exactly one chain: Bitcoin (SHA256d) or the BLAKE2b fork.</p>
+
+  <section>
+    <h2>Chain <span class="badge" id="chainBadge"></span></h2>
+    <div class="chains">
+      <label class="chain sel" id="chainLabel0"><input type="radio" name="chain" value="0" checked>
+        <span><b>Blake2B = 0 · Bitcoin (SHA256d) only</b><small>Adds an 84-byte OP_RETURN output. Its 87-byte script breaks BIP-110's 83-byte limit, so the BLAKE2b chain rejects the transaction. Explorer: mempool.space</small></span></label>
+      <label class="chain" id="chainLabel1"><input type="radio" name="chain" value="1">
+        <span><b>Blake2B = 1 · BLAKE2b chain only</b><small>Every input is marked for the unified sighash (ALL|UNIFIED, 0x21). Sparrow (BLAKE2b build) signs with it, and such signatures are invalid on SHA256d. Explorer: mempool.guide</small></span></label>
+    </div>
+    <div style="margin-top:10px">
+      <label for="explorer">Explorer base URL</label>
+      <p class="hint">Any Esplora / mempool-compatible API. Reset automatically when the chain changes.</p>
+      <input type="text" id="explorer" spellcheck="false">
+      <div class="status" id="explorerStatus"></div>
+      <div class="chips" id="explorerChips"></div>
+      <div class="status" id="proxyStatus"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Input UTXOs</h2>
+    <p class="hint">Previous transaction ID and output number, as <code>txid:vout</code>. Value, script type and spent status are looked up on the selected chain.</p>
+    <div id="utxoList"></div>
+    <button class="small" id="addUtxo" type="button">+ Add another UTXO</button>
+  </section>
+
+  <section>
+    <label for="dest">Destination address</label>
+    <p class="hint">The Bitcoin address to pay. Mainnet only: 1…, 3…, bc1q… or bc1p… (identical on both chains).</p>
+    <input type="text" id="dest" spellcheck="false" autocomplete="off">
+    <div class="status" id="destStatus"></div>
+  </section>
+
+  <section>
+    <label for="amount">Amount to send (satoshis)</label>
+    <p class="hint">Whole satoshis. 100,000,000 sats = 1 BTC.</p>
+    <input type="text" id="amount" inputmode="numeric" spellcheck="false" autocomplete="off">
+    <div class="status" id="amountStatus"></div>
+  </section>
+
+  <section>
+    <label for="change">Change address</label>
+    <p class="hint">Your own address. Receives the inputs minus the payment and the fee.</p>
+    <input type="text" id="change" spellcheck="false" autocomplete="off">
+    <div class="status" id="changeStatus"></div>
+  </section>
+
+  <section>
+    <label for="rate">Fee rate (sats per vByte)</label>
+    <p class="hint">Defaults to the explorer's current Low Priority rate. <a href="#" id="resetRate">Reset to Low Priority</a></p>
+    <input type="text" id="rate" inputmode="decimal" spellcheck="false" autocomplete="off">
+    <div class="status" id="rateStatus"></div>
+  </section>
+
+  <section>
+    <h2>Transaction summary</h2>
+    <div id="summary"></div>
+    <div style="margin-top:12px">
+      <button class="primary" id="generate" type="button" disabled>Generate PSBT</button>
+    </div>
+  </section>
+
+  <section id="resultSection" hidden>
+    <h2>PSBT</h2>
+    <div id="resultInfo"></div>
+    <div class="actions">
+      <button id="download" type="button">Download .psbt file</button>
+      <button id="copy" type="button">Copy base64</button>
+    </div>
+    <textarea id="psbtText" readonly spellcheck="false"></textarea>
+    <p class="hint">In Sparrow: File → Open Transaction → From File (the .psbt) or From Text (the base64). Check the inputs and outputs, sign, then broadcast.</p>
+  </section>
+</main>
+
+<script id="lib">
+/* Pure functions: no DOM access. Exposed as PSBTLib (and module.exports under Node). */
+const PSBTLib = (() => {
+  'use strict';
+
+  // ---------- byte helpers ----------
+  const HEX_RE = /^[0-9a-fA-F]*$/;
+  function hexToBytes(h) {
+    if (typeof h !== 'string' || h.length % 2 !== 0 || !HEX_RE.test(h)) throw new Error('invalid hex string');
+    const out = new Uint8Array(h.length / 2);
+    for (let i = 0; i < out.length; i++) out[i] = parseInt(h.substr(i * 2, 2), 16);
+    return out;
+  }
+  function bytesToHex(b) { return Array.from(b, x => x.toString(16).padStart(2, '0')).join(''); }
+  function concat(...arrs) {
+    const out = new Uint8Array(arrs.reduce((s, a) => s + a.length, 0));
+    let o = 0;
+    for (const a of arrs) { out.set(a, o); o += a.length; }
+    return out;
+  }
+  function u16le(n) { const b = new Uint8Array(2); new DataView(b.buffer).setUint16(0, n, true); return b; }
+  function u32le(n) { const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, n >>> 0, true); return b; }
+  function u64le(n) { const b = new Uint8Array(8); new DataView(b.buffer).setBigUint64(0, BigInt(n), true); return b; }
+  function varint(n) {
+    if (n < 0xfd) return Uint8Array.of(n);
+    if (n <= 0xffff) return concat(Uint8Array.of(0xfd), u16le(n));
+    if (n <= 0xffffffff) return concat(Uint8Array.of(0xfe), u32le(n));
+    return concat(Uint8Array.of(0xff), u64le(n));
+  }
+  function reverse(b) { return Uint8Array.from(b).reverse(); }
+  const subtle = (typeof globalThis.crypto !== 'undefined' && globalThis.crypto.subtle) || null;
+  async function sha256(b) {
+    if (!subtle) throw new Error('WebCrypto (crypto.subtle) unavailable; open this page over https:// or file://');
+    return new Uint8Array(await subtle.digest('SHA-256', b));
+  }
+  async function sha256d(b) { return sha256(await sha256(b)); }
+  function toBase64(bytes) {
+    let s = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(s);
+  }
+
+  // ---------- Base58Check ----------
+  const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  function base58Decode(s) {
+    let n = 0n;
+    for (const c of s) {
+      const i = B58.indexOf(c);
+      if (i < 0) throw new Error(`invalid Base58 character "${c}"`);
+      n = n * 58n + BigInt(i);
+    }
+    const bytes = [];
+    while (n > 0n) { bytes.unshift(Number(n & 0xffn)); n >>= 8n; }
+    let z = 0;
+    while (z < s.length && s[z] === '1') z++;
+    return Uint8Array.from([...new Array(z).fill(0), ...bytes]);
+  }
+  async function decodeBase58Check(s) {
+    const b = base58Decode(s);
+    if (b.length !== 25) throw new Error('wrong length for a Base58 address');
+    const payload = b.slice(0, 21), check = b.slice(21);
+    const h = await sha256d(payload);
+    for (let i = 0; i < 4; i++) if (h[i] !== check[i]) throw new Error('Base58 checksum mismatch (typo?)');
+    return { version: payload[0], hash: payload.slice(1) };
+  }
+
+  // ---------- Bech32 / Bech32m (BIP-173 / BIP-350) ----------
+  const B32 = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+  const BECH32M_CONST = 0x2bc830a3;
+  function polymod(values) {
+    const G = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3];
+    let chk = 1;
+    for (const v of values) {
+      const top = chk >>> 25;
+      chk = ((chk & 0x1ffffff) << 5) ^ v;
+      for (let i = 0; i < 5; i++) if ((top >>> i) & 1) chk ^= G[i];
+    }
+    return chk >>> 0;
+  }
+  function hrpExpand(hrp) {
+    const r = [];
+    for (const c of hrp) r.push(c.charCodeAt(0) >> 5);
+    r.push(0);
+    for (const c of hrp) r.push(c.charCodeAt(0) & 31);
+    return r;
+  }
+  function bech32Decode(str) {
+    if (str.length > 90) throw new Error('address too long');
+    const lower = str.toLowerCase(), upper = str.toUpperCase();
+    if (str !== lower && str !== upper) throw new Error('mixed-case Bech32 address');
+    const s = lower;
+    const pos = s.lastIndexOf('1');
+    if (pos < 1 || pos + 7 > s.length) throw new Error('malformed Bech32 address');
+    const hrp = s.slice(0, pos);
+    for (const c of hrp) { const cc = c.charCodeAt(0); if (cc < 33 || cc > 126) throw new Error('invalid prefix character'); }
+    const data = [];
+    for (const c of s.slice(pos + 1)) {
+      const i = B32.indexOf(c);
+      if (i < 0) throw new Error(`invalid Bech32 character "${c}"`);
+      data.push(i);
+    }
+    const pm = polymod([...hrpExpand(hrp), ...data]);
+    const encoding = pm === 1 ? 'bech32' : pm === BECH32M_CONST ? 'bech32m' : null;
+    if (!encoding) throw new Error('Bech32 checksum mismatch (typo?)');
+    return { hrp, data: data.slice(0, -6), encoding };
+  }
+  function convertBits(data, from, to, pad) {
+    let acc = 0, bits = 0;
+    const out = [], maxv = (1 << to) - 1;
+    for (const v of data) {
+      acc = ((acc << from) | v) & 0x3fffffff;
+      bits += from;
+      while (bits >= to) { bits -= to; out.push((acc >> bits) & maxv); }
+    }
+    if (pad) { if (bits) out.push((acc << (to - bits)) & maxv); }
+    else if (bits >= from || ((acc << (to - bits)) & maxv)) throw new Error('invalid padding in Bech32 data');
+    return out;
+  }
+
+  // ---------- addresses ----------
+  // Returns { script: Uint8Array, type: 'p2pkh'|'p2sh'|'p2wpkh'|'p2wsh'|'p2tr' }
+  async function addressToScript(addrIn) {
+    const addr = String(addrIn || '').trim();
+    if (!addr) throw new Error('empty address');
+    const l = addr.toLowerCase();
+    if (/^(bc|tb|bcrt)1/.test(l)) {
+      const { hrp, data, encoding } = bech32Decode(addr);
+      if (hrp !== 'bc') throw new Error(hrp === 'tb' || hrp === 'bcrt' ? `${hrp}1… is a test-network address; a mainnet bc1… address is required` : `unsupported prefix "${hrp}"`);
+      if (!data.length) throw new Error('empty witness program');
+      const ver = data[0];
+      if (ver > 16) throw new Error('invalid witness version');
+      const prog = convertBits(data.slice(1), 5, 8, false);
+      if (prog.length < 2 || prog.length > 40) throw new Error('invalid witness program length');
+      if (ver === 0 && encoding !== 'bech32') throw new Error('version-0 address must use Bech32, not Bech32m');
+      if (ver !== 0 && encoding !== 'bech32m') throw new Error('version-1+ address must use Bech32m');
+      let type;
+      if (ver === 0 && prog.length === 20) type = 'p2wpkh';
+      else if (ver === 0 && prog.length === 32) type = 'p2wsh';
+      else if (ver === 0) throw new Error('version-0 program must be 20 or 32 bytes');
+      else if (ver === 1 && prog.length === 32) type = 'p2tr';
+      else throw new Error(`witness version ${ver} addresses are not supported`);
+      const script = concat(Uint8Array.of(ver === 0 ? 0x00 : 0x50 + ver, prog.length), Uint8Array.from(prog));
+      return { script, type };
+    }
+    const { version, hash } = await decodeBase58Check(addr);
+    if (version === 0x00) return { script: concat(hexToBytes('76a914'), hash, hexToBytes('88ac')), type: 'p2pkh' };
+    if (version === 0x05) return { script: concat(hexToBytes('a914'), hash, hexToBytes('87')), type: 'p2sh' };
+    if (version === 0x6f || version === 0xc4) throw new Error('test-network address; a mainnet address is required');
+    throw new Error(`unknown address version byte 0x${version.toString(16).padStart(2, '0')}`);
+  }
+
+  // ---------- sizes, dust ----------
+  const INPUT_VBYTES = { p2wpkh: 68, p2tr: 57.5, p2pkh: 148 };
+  const SEGWIT_INPUT = { p2wpkh: true, p2tr: true, p2pkh: false };
+  const OUTPUT_VBYTES = { p2pkh: 34, p2sh: 32, p2wpkh: 31, p2wsh: 43, p2tr: 43, op_return84: 96 };
+  const DUST = { p2pkh: 546, p2sh: 540, p2wpkh: 294, p2wsh: 330, p2tr: 330 };
+  // explorer scriptpubkey_type -> our input type
+  const SUPPORTED_INPUT_TYPES = { v0_p2wpkh: 'p2wpkh', v1_p2tr: 'p2tr', p2pkh: 'p2pkh' };
+  const TYPE_LABEL = { p2pkh: 'P2PKH (legacy)', p2sh: 'P2SH', p2wpkh: 'P2WPKH (native segwit)', p2wsh: 'P2WSH', p2tr: 'P2TR (taproot)', op_return84: 'OP_RETURN' };
+
+  function estimateVsize(inputTypes, outputTypes) {
+    let w = 0, segwit = false;
+    for (const t of inputTypes) {
+      if (!(t in INPUT_VBYTES)) throw new Error(`unsupported input type ${t}`);
+      w += INPUT_VBYTES[t];
+      if (SEGWIT_INPUT[t]) segwit = true;
+    }
+    for (const t of outputTypes) {
+      if (!(t in OUTPUT_VBYTES)) throw new Error(`unsupported output type ${t}`);
+      w += OUTPUT_VBYTES[t];
+    }
+    w += 8 + varint(inputTypes.length).length + varint(outputTypes.length).length + (segwit ? 0.5 : 0);
+    return Math.ceil(w);
+  }
+
+  // ---------- OP_RETURN (chain 0 replay protection) ----------
+  // 84-byte payload -> 87-byte script (OP_RETURN OP_PUSHDATA1 0x54 <84 bytes>), over BIP-110's 83-byte cap.
+  const OP_RETURN_TEXT = 'SHA256d only: OP_RETURN >83 bytes is invalid on the BLAKE2b chain (BIP-110)';
+  function buildOpReturn84(text = OP_RETURN_TEXT) {
+    const enc = new TextEncoder().encode(text);
+    if (enc.length > 84) throw new Error('OP_RETURN text longer than 84 bytes');
+    const payload = new Uint8Array(84).fill(0x20);
+    payload.set(enc);
+    return concat(Uint8Array.of(0x6a, 0x4c, 84), payload);
+  }
+
+  // ---------- transactions ----------
+  // tx = { version, inputs: [{ txid(hex), vout, scriptSig(Uint8Array), sequence, witness:[Uint8Array] }], outputs: [{ value, script }], locktime }
+  function serializeTx(tx, withWitness) {
+    const hasWitness = withWitness && tx.inputs.some(i => i.witness && i.witness.length);
+    const parts = [u32le(tx.version)];
+    if (hasWitness) parts.push(Uint8Array.of(0x00, 0x01));
+    parts.push(varint(tx.inputs.length));
+    for (const i of tx.inputs) {
+      const ss = i.scriptSig || new Uint8Array(0);
+      parts.push(reverse(hexToBytes(i.txid)), u32le(i.vout), varint(ss.length), ss, u32le(i.sequence));
+    }
+    parts.push(varint(tx.outputs.length));
+    for (const o of tx.outputs) parts.push(u64le(o.value), varint(o.script.length), o.script);
+    if (hasWitness) {
+      for (const i of tx.inputs) {
+        const w = i.witness || [];
+        parts.push(varint(w.length));
+        for (const item of w) parts.push(varint(item.length), item);
+      }
+    }
+    parts.push(u32le(tx.locktime));
+    return concat(...parts);
+  }
+  function parseTx(bytes) {
+    let p = 0;
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const need = n => { if (p + n > bytes.length) throw new Error('truncated transaction'); };
+    const rU32 = () => { need(4); const v = dv.getUint32(p, true); p += 4; return v; };
+    const rU64 = () => { need(8); const v = dv.getBigUint64(p, true); p += 8; return Number(v); };
+    const rVar = () => {
+      need(1); const f = bytes[p++];
+      if (f < 0xfd) return f;
+      if (f === 0xfd) { need(2); const v = dv.getUint16(p, true); p += 2; return v; }
+      if (f === 0xfe) return rU32();
+      return rU64();
+    };
+    const rBytes = n => { need(n); const b = bytes.slice(p, p + n); p += n; return b; };
+    const tx = { version: rU32(), inputs: [], outputs: [], locktime: 0 };
+    let nIn = rVar(), segwit = false;
+    if (nIn === 0) { const flag = bytes[p++]; if (flag !== 1) throw new Error('bad segwit flag'); segwit = true; nIn = rVar(); }
+    for (let i = 0; i < nIn; i++) {
+      const txid = bytesToHex(reverse(rBytes(32)));
+      const vout = rU32();
+      const scriptSig = rBytes(rVar());
+      const sequence = rU32();
+      tx.inputs.push({ txid, vout, scriptSig, sequence, witness: [] });
+    }
+    const nOut = rVar();
+    for (let i = 0; i < nOut; i++) { const value = rU64(); const script = rBytes(rVar()); tx.outputs.push({ value, script }); }
+    if (segwit) for (const inp of tx.inputs) { const n = rVar(); for (let j = 0; j < n; j++) inp.witness.push(rBytes(rVar())); }
+    tx.locktime = rU32();
+    if (p !== bytes.length) throw new Error('trailing bytes after transaction');
+    return tx;
+  }
+  async function txidOf(bytes) {
+    return bytesToHex(reverse(await sha256d(serializeTx(parseTx(bytes), false))));
+  }
+  function buildUnsignedTx({ inputs, outputs, locktime }) {
+    return {
+      version: 2,
+      inputs: inputs.map(i => ({ txid: i.txid, vout: i.vout, scriptSig: new Uint8Array(0), sequence: 0xfffffffd, witness: [] })),
+      outputs: outputs.map(o => ({ value: o.value, script: o.script })),
+      locktime: locktime >>> 0,
+    };
+  }
+
+  // ---------- PSBT (BIP-174 v0) ----------
+  function psbtRecord(keyType, value, keyData = new Uint8Array(0)) {
+    const key = concat(Uint8Array.of(keyType), keyData);
+    return concat(varint(key.length), key, varint(value.length), value);
+  }
+  // inputMeta[i] = { nonWitnessUtxo?: Uint8Array, witnessUtxo?: { value, script }, sighashType?: number }
+  function buildPsbt(tx, inputMeta) {
+    const parts = [hexToBytes('70736274ff'), psbtRecord(0x00, serializeTx(tx, false)), Uint8Array.of(0x00)];
+    tx.inputs.forEach((_, i) => {
+      const m = inputMeta[i] || {};
+      if (m.nonWitnessUtxo) parts.push(psbtRecord(0x00, m.nonWitnessUtxo));
+      if (m.witnessUtxo) parts.push(psbtRecord(0x01, concat(u64le(m.witnessUtxo.value), varint(m.witnessUtxo.script.length), m.witnessUtxo.script)));
+      if (m.sighashType != null) parts.push(psbtRecord(0x03, u32le(m.sighashType)));
+      parts.push(Uint8Array.of(0x00));
+    });
+    tx.outputs.forEach(() => parts.push(Uint8Array.of(0x00)));
+    return concat(...parts);
+  }
+
+  // ---------- planning ----------
+  const SIGHASH_ALL_UNIFIED = 0x21;
+  // utxos: [{ txid, vout, value, script, type }], dest/change: { script, type }, rate: sat/vB, chain: 0|1
+  function planTransaction({ chain, utxos, dest, amount, change, rate }) {
+    if (!utxos.length) throw new Error('at least one input is required');
+    if (!Number.isInteger(amount) || amount <= 0) throw new Error('amount must be a positive whole number of satoshis');
+    if (!(rate > 0)) throw new Error('fee rate must be positive');
+    if (amount < DUST[dest.type]) throw new Error(`amount is below the dust limit for a ${TYPE_LABEL[dest.type]} output (${DUST[dest.type]} sats)`);
+    const total = utxos.reduce((s, u) => s + u.value, 0);
+    const inputTypes = utxos.map(u => u.type);
+    const outputs = [{ value: amount, script: dest.script, type: dest.type, label: 'Destination' }];
+    if (chain === 0) outputs.push({ value: 0, script: buildOpReturn84(), type: 'op_return84', label: 'OP_RETURN (84-byte payload)' });
+    const vsizeWithChange = estimateVsize(inputTypes, [...outputs.map(o => o.type), change.type]);
+    const feeWithChange = Math.ceil(vsizeWithChange * rate);
+    let changeValue = total - amount - feeWithChange;
+    let vsize, fee, changeDropped = false;
+    if (changeValue >= DUST[change.type]) {
+      outputs.push({ value: changeValue, script: change.script, type: change.type, label: 'Change' });
+      vsize = vsizeWithChange; fee = feeWithChange;
+    } else {
+      vsize = estimateVsize(inputTypes, outputs.map(o => o.type));
+      const minFee = Math.ceil(vsize * rate);
+      fee = total - amount;
+      if (fee < minFee) throw new Error(`insufficient funds: inputs total ${total.toLocaleString()} sats but amount + fee needs ${(amount + minFee).toLocaleString()} sats`);
+      changeDropped = true; changeValue = 0;
+    }
+    return { total, outputs, vsize, fee, changeValue, changeDropped, effectiveRate: fee / vsize };
+  }
+  function inputMetaFor(chain, utxo) {
+    return {
+      nonWitnessUtxo: utxo.raw,
+      witnessUtxo: SEGWIT_INPUT[utxo.type] ? { value: utxo.value, script: utxo.script } : null,
+      sighashType: chain === 1 ? SIGHASH_ALL_UNIFIED : null,
+    };
+  }
+  // Full pipeline: returns { tx, psbt(Uint8Array), base64, plan }
+  function assemble({ chain, utxos, dest, amount, change, rate, locktime }) {
+    const plan = planTransaction({ chain, utxos, dest, amount, change, rate });
+    const tx = buildUnsignedTx({ inputs: utxos, outputs: plan.outputs, locktime: locktime || 0 });
+    const psbt = buildPsbt(tx, utxos.map(u => inputMetaFor(chain, u)));
+    return { tx, psbt, base64: toBase64(psbt), plan };
+  }
+
+  return {
+    hexToBytes, bytesToHex, concat, varint, u32le, u64le, reverse, sha256, sha256d, toBase64,
+    base58Decode, decodeBase58Check, bech32Decode, convertBits, addressToScript,
+    INPUT_VBYTES, OUTPUT_VBYTES, DUST, SEGWIT_INPUT, SUPPORTED_INPUT_TYPES, TYPE_LABEL, estimateVsize,
+    OP_RETURN_TEXT, buildOpReturn84, serializeTx, parseTx, txidOf, buildUnsignedTx, buildPsbt,
+    SIGHASH_ALL_UNIFIED, planTransaction, inputMetaFor, assemble,
+  };
+})();
+if (typeof module !== 'undefined' && module.exports) module.exports = PSBTLib;
+</script>
+
+<script id="app">
+(() => {
+  'use strict';
+  const L = PSBTLib;
+  const $ = id => document.getElementById(id);
+  const CHAINS = {
+    0: { name: 'Bitcoin (SHA256d)', explorer: 'https://mempool.space', file: 'sha256d', alternatives: ['https://mempool.space', 'https://blockstream.info'] },
+    1: { name: 'BLAKE2b chain', explorer: 'https://mempool.guide', file: 'blake2b', alternatives: ['https://mempool.guide', 'https://mempool.kilombino.com'] },
+  };
+  // When the page is served by serve.py, explorer calls go through its CORS proxy.
+  let proxyBase = null;
+  async function detectProxy() {
+    if (!/^https?:$/.test(location.protocol)) return;
+    try {
+      const r = await fetch('/proxy/ping', { cache: 'no-store' });
+      if (r.ok && (await r.text()).trim() === 'psbtgenerator-proxy') proxyBase = location.origin + '/proxy/';
+    } catch { /* not served by serve.py */ }
+    $('proxyStatus').className = 'status ' + (proxyBase ? 'ok' : 'empty');
+    $('proxyStatus').textContent = proxyBase
+      ? 'Requests go through the local serve.py proxy, so explorers without CORS headers work too.'
+      : 'Direct browser requests. If an explorer blocks them (CORS), run "python3 serve.py" and open http://127.0.0.1:8765/, or pick another explorer.';
+  }
+  function apiUrl(path) {
+    const base = explorerBase();
+    if (proxyBase) { try { return proxyBase + new URL(base).host + path; } catch { /* fall through */ } }
+    return base + path;
+  }
+  const fmt = n => Number(n).toLocaleString('en-US');
+  const btc = n => (n / 1e8).toFixed(8).replace(/\.?0+$/, '') + ' BTC';
+
+  const state = {
+    chain: 0,
+    utxos: [],            // { id, el, input, statusEl, text, status, msg, data, ctrl, timer }
+    dest: { text: '', status: 'empty', msg: '', value: null, token: 0 },
+    change: { text: '', status: 'empty', msg: '', value: null, token: 0 },
+    amount: { text: '', status: 'empty', msg: '', value: null },
+    rate: { text: '', status: 'empty', msg: '', value: null, userEdited: false, suggested: null },
+    tip: null, tipMsg: '',
+    plan: null, planError: null,
+    result: null,
+  };
+  let netToken = 0; // bumps when chain/explorer changes so stale responses are ignored
+
+  const explorerBase = () => ($('explorer').value.trim() || CHAINS[state.chain].explorer).replace(/\/+$/, '');
+  const explorerHost = () => { try { return new URL(explorerBase()).host; } catch { return explorerBase(); } };
+
+  async function getJSON(url, ctrl) { return (await getResp(url, ctrl)).json(); }
+  async function getText(url, ctrl) { return (await getResp(url, ctrl)).text(); }
+  async function getResp(url, ctrl) {
+    let r;
+    try { r = await fetch(url, { signal: ctrl && ctrl.signal, cache: 'no-store' }); }
+    catch (e) {
+      if (e.name === 'AbortError') throw e;
+      throw new Error(proxyBase
+        ? `cannot reach ${explorerHost()} through the local proxy (${e.message})`
+        : `the browser could not fetch from ${explorerHost()} (network error or missing CORS headers). Run "python3 serve.py" and open http://127.0.0.1:8765/, or choose another explorer above.`);
+    }
+    if (!r.ok) {
+      const t = (await r.text().catch(() => '')).trim().slice(0, 100);
+      throw new Error(`${explorerHost()} responded ${r.status}${t ? ': ' + t : ''}`);
+    }
+    return r;
+  }
+
+  function setStatus(el, input, status, msg) {
+    el.className = 'status ' + status;
+    el.textContent = msg;
+    if (input) input.className = status === 'ok' ? 'ok' : status === 'err' ? 'err' : '';
+  }
+
+  // ---------- UTXO rows ----------
+  let utxoSeq = 0;
+  function addUtxoRow(text = '') {
+    const row = { id: ++utxoSeq, text, status: 'empty', msg: '', data: null, ctrl: null, timer: null };
+    const el = document.createElement('div');
+    el.className = 'utxo';
+    el.innerHTML = `<div class="row"><div><input type="text" spellcheck="false" autocomplete="off" placeholder="txid:vout" aria-label="Input UTXO ${row.id}"><div class="status"></div></div><button type="button" class="small" title="Remove this UTXO">Remove</button></div>`;
+    row.el = el; row.input = el.querySelector('input'); row.statusEl = el.querySelector('.status');
+    row.input.value = text;
+    row.input.addEventListener('input', () => {
+      row.text = row.input.value;
+      clearTimeout(row.timer);
+      row.timer = setTimeout(() => lookupUtxo(row), 350);
+      setRow(row, 'loading', row.text.trim() ? '…' : 'Enter txid:vout');
+    });
+    el.querySelector('button').addEventListener('click', () => {
+      if (row.ctrl) row.ctrl.abort();
+      state.utxos = state.utxos.filter(r => r !== row);
+      el.remove();
+      if (!state.utxos.length) addUtxoRow();
+      recompute();
+    });
+    $('utxoList').appendChild(el);
+    state.utxos.push(row);
+    setRow(row, 'empty', 'Enter txid:vout');
+    if (text) lookupUtxo(row);
+    return row;
+  }
+  function setRow(row, status, msg) {
+    row.status = status; row.msg = msg;
+    setStatus(row.statusEl, row.input, status, msg);
+    recompute();
+  }
+  async function lookupUtxo(row) {
+    if (row.ctrl) row.ctrl.abort();
+    row.data = null;
+    const t = row.text.trim();
+    if (!t) return setRow(row, 'empty', 'Enter txid:vout');
+    const m = /^([0-9a-fA-F]{64}):(\d+)$/.exec(t);
+    if (!m) return setRow(row, 'err', 'Format is 64 hex characters, a colon, then the output number, e.g. c83b6e03…5e45ac:0');
+    const txid = m[1].toLowerCase(), vout = parseInt(m[2], 10);
+    const dup = state.utxos.find(r => r !== row && /^([0-9a-fA-F]{64}):(\d+)$/.test(r.text.trim()) && r.text.trim().toLowerCase() === `${txid}:${vout}`);
+    if (dup) return setRow(row, 'err', 'This UTXO is already listed above');
+    const ctrl = row.ctrl = new AbortController();
+    const token = netToken;
+    setRow(row, 'loading', `Looking up on ${explorerHost()}…`);
+    try {
+      const txj = await getJSON(apiUrl(`/api/tx/${txid}`), ctrl);
+      if (!txj || !Array.isArray(txj.vout)) throw new Error('unexpected explorer response');
+      const out = txj.vout[vout];
+      if (!out) throw new Error(`transaction has ${txj.vout.length} output(s), so the output number must be 0–${txj.vout.length - 1}`);
+      const type = L.SUPPORTED_INPUT_TYPES[out.scriptpubkey_type];
+      if (!type) throw new Error(`${out.scriptpubkey_type} inputs are not supported (only P2WPKH bc1q…, P2TR bc1p…, and legacy P2PKH 1…)`);
+      const [spends, hex] = await Promise.all([
+        getJSON(apiUrl(`/api/tx/${txid}/outspends`), ctrl),
+        getText(apiUrl(`/api/tx/${txid}/hex`), ctrl),
+      ]);
+      const spend = Array.isArray(spends) ? spends[vout] : null;
+      if (!spend || typeof spend.spent !== 'boolean') throw new Error('unexpected spend-status response from the explorer');
+      if (spend.spent) throw new Error(`already spent on ${CHAINS[state.chain].name}${spend.txid ? ' by ' + spend.txid.slice(0, 12) + '…' : ''}`);
+      const raw = L.hexToBytes(hex.trim());
+      if ((await L.txidOf(raw)) !== txid) throw new Error('raw transaction from the explorer does not hash to this txid');
+      const po = L.parseTx(raw).outputs[vout];
+      if (po.value !== out.value || L.bytesToHex(po.script) !== out.scriptpubkey) throw new Error('explorer JSON and raw transaction disagree about this output');
+      if (ctrl.signal.aborted || token !== netToken) return;
+      const st = txj.status || {};
+      row.data = { txid, vout, value: out.value, script: L.hexToBytes(out.scriptpubkey), type, address: out.scriptpubkey_address, raw, confirmed: !!st.confirmed, height: st.block_height };
+      setRow(row, 'ok', `${fmt(out.value)} sats (${btc(out.value)}) · ${L.TYPE_LABEL[type]} · ${out.scriptpubkey_address} · ${st.confirmed ? 'confirmed in block ' + fmt(st.block_height) : 'UNCONFIRMED'}`);
+    } catch (e) {
+      if (e.name === 'AbortError' || ctrl.signal.aborted || token !== netToken) return;
+      setRow(row, 'err', e.message);
+    }
+  }
+
+  // ---------- address fields ----------
+  async function validateAddress(key) {
+    const f = state[key], input = $(key), el = $(key + 'Status');
+    f.text = input.value; f.value = null;
+    const token = ++f.token;
+    const t = f.text.trim();
+    if (!t) { f.status = 'empty'; f.msg = 'Enter an address'; setStatus(el, input, 'empty', f.msg); return recompute(); }
+    try {
+      const r = await L.addressToScript(t);
+      if (token !== f.token) return;
+      f.value = r; f.status = 'ok'; f.msg = `${L.TYPE_LABEL[r.type]} · script ${L.bytesToHex(r.script)}`;
+    } catch (e) {
+      if (token !== f.token) return;
+      f.status = 'err'; f.msg = e.message;
+    }
+    setStatus(el, input, f.status, f.msg);
+    recompute();
+  }
+
+  function validateAmount() {
+    const f = state.amount, input = $('amount');
+    f.text = input.value; f.value = null;
+    const t = f.text.trim().replace(/[,_\s]/g, '');
+    if (!t) { f.status = 'empty'; f.msg = 'Enter the amount in satoshis'; }
+    else if (!/^\d+$/.test(t)) { f.status = 'err'; f.msg = 'Whole satoshis only (digits, no decimal point)'; }
+    else if (!Number.isSafeInteger(Number(t)) || Number(t) > 2100000000000000) { f.status = 'err'; f.msg = 'Amount is out of range'; }
+    else if (Number(t) === 0) { f.status = 'err'; f.msg = 'Amount must be greater than zero'; }
+    else { f.value = Number(t); f.status = 'ok'; f.msg = `${fmt(f.value)} sats = ${btc(f.value)}`; }
+    setStatus($('amountStatus'), input, f.status, f.msg);
+    recompute();
+  }
+
+  function validateRate(fromUser) {
+    const f = state.rate, input = $('rate');
+    f.text = input.value; f.value = null;
+    if (fromUser) f.userEdited = true;
+    const t = f.text.trim();
+    if (!t) { f.status = 'empty'; f.msg = 'Enter a fee rate'; }
+    else if (!/^\d+(\.\d+)?$/.test(t)) { f.status = 'err'; f.msg = 'Enter a number, e.g. 1 or 2.5'; }
+    else if (Number(t) < 1) { f.status = 'err'; f.msg = 'Must be at least 1 sat/vB (network minimum relay fee)'; }
+    else if (Number(t) > 5000) { f.status = 'err'; f.msg = 'That fee rate is implausibly high'; }
+    else {
+      f.value = Number(t); f.status = 'ok';
+      f.msg = f.suggested == null ? `${f.value} sat/vB` : (f.value === f.suggested && !f.userEdited ? `Low Priority on ${explorerHost()}: ${f.suggested} sat/vB` : `${f.value} sat/vB (Low Priority on ${explorerHost()} is ${f.suggested})`);
+    }
+    setStatus($('rateStatus'), input, f.status, f.msg);
+    recompute();
+  }
+
+  // ---------- chain-level data ----------
+  async function fetchChainData() {
+    const token = ++netToken;
+    renderChips();
+    setStatus($('explorerStatus'), null, 'loading', `Checking ${explorerHost()}…`);
+    state.tip = null; state.tipMsg = '';
+    if (!state.rate.userEdited) { state.rate.suggested = null; $('rate').value = ''; validateRate(false); setStatus($('rateStatus'), $('rate'), 'loading', 'Fetching Low Priority fee…'); }
+    const ctrl = new AbortController();
+    // Esplora path first, then mempool's /api/v1 variant (which some explorers expose with CORS headers when the plain path lacks them).
+    const tipReq = getJSON(apiUrl('/api/blocks/tip/height'), ctrl).catch(e1 => getJSON(apiUrl('/api/v1/blocks/tip/height'), ctrl).catch(() => { throw e1; }));
+    // mempool's recommended fees first; plain Esplora (blockstream.info) only has /api/fee-estimates keyed by confirmation target.
+    const feeReq = getJSON(apiUrl('/api/v1/fees/recommended'), ctrl).catch(e1 =>
+      getJSON(apiUrl('/api/fee-estimates'), ctrl).then(est => {
+        const v = est && (est['6'] ?? est['5'] ?? est['4'] ?? est['3']);
+        if (typeof v !== 'number') throw e1;
+        return { hourFee: Math.max(1, Math.ceil(v * 10) / 10) };
+      }).catch(() => { throw e1; }));
+    const results = await Promise.allSettled([
+      tipReq,
+      feeReq,
+    ]);
+    if (token !== netToken) return;
+    const [tipR, feeR] = results;
+    if (tipR.status === 'fulfilled' && Number.isInteger(tipR.value)) {
+      state.tip = tipR.value;
+      setStatus($('explorerStatus'), null, 'ok', `${explorerHost()} · chain tip ${fmt(state.tip)}`);
+    } else {
+      state.tipMsg = tipR.reason ? tipR.reason.message : 'unexpected response';
+      setStatus($('explorerStatus'), null, 'err', `Could not read chain tip: ${state.tipMsg}`);
+    }
+    if (feeR.status === 'fulfilled' && feeR.value && typeof feeR.value.hourFee === 'number') {
+      state.rate.suggested = feeR.value.hourFee;
+      if (!state.rate.userEdited) $('rate').value = String(feeR.value.hourFee);
+      validateRate(false);
+    } else {
+      state.rate.suggested = null;
+      validateRate(false);
+      if (!state.rate.userEdited) setStatus($('rateStatus'), $('rate'), 'err', `Could not fetch fee rates (${feeR.reason ? feeR.reason.message : 'unexpected response'}); enter one manually`);
+    }
+    for (const row of state.utxos) lookupUtxo(row);
+    recompute();
+  }
+
+  function renderChips() {
+    const box = $('explorerChips');
+    box.innerHTML = '';
+    const cur = explorerBase();
+    for (const url of CHAINS[state.chain].alternatives) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.textContent = url.replace(/^https?:\/\//, '');
+      if (url === cur) b.classList.add('cur');
+      b.addEventListener('click', () => { if (explorerBase() === url) return; $('explorer').value = url; hideResult(); fetchChainData(); });
+      box.appendChild(b);
+    }
+  }
+  function setChain(chain) {
+    state.chain = chain;
+    $('chainLabel0').classList.toggle('sel', chain === 0);
+    $('chainLabel1').classList.toggle('sel', chain === 1);
+    $('chainBadge').textContent = CHAINS[chain].name;
+    $('explorer').value = CHAINS[chain].explorer;
+    hideResult();
+    fetchChainData();
+  }
+
+  // ---------- summary / plan ----------
+  function recompute() {
+    state.plan = null; state.planError = null;
+    const problems = [];
+    const utxosReady = state.utxos.length && state.utxos.every(r => r.status === 'ok' && r.data);
+    if (!state.utxos.length || state.utxos.every(r => r.status === 'empty')) problems.push('Add at least one input UTXO.');
+    else if (!utxosReady) problems.push(state.utxos.some(r => r.status === 'loading') ? 'Waiting for UTXO lookup…' : 'Fix the input UTXO(s) above.');
+    if (state.dest.status !== 'ok') problems.push(state.dest.status === 'empty' ? 'Enter a destination address.' : 'Fix the destination address.');
+    if (state.amount.status !== 'ok') problems.push(state.amount.status === 'empty' ? 'Enter an amount.' : 'Fix the amount.');
+    if (state.change.status !== 'ok') problems.push(state.change.status === 'empty' ? 'Enter a change address.' : 'Fix the change address.');
+    if (state.rate.status !== 'ok') problems.push(state.rate.status === 'empty' ? 'Enter a fee rate.' : 'Fix the fee rate.');
+
+    const sum = $('summary');
+    const warnings = [];
+    if (state.dest.value && state.change.value && L.bytesToHex(state.dest.value.script) === L.bytesToHex(state.change.value.script)) warnings.push('Destination and change address are the same.');
+    if (state.tip == null) warnings.push('Chain tip unknown: nLockTime will be 0 instead of the current height (anti-fee-sniping disabled).');
+    if (state.utxos.some(r => r.data && !r.data.confirmed)) warnings.push('At least one input is unconfirmed.');
+
+    if (problems.length) {
+      sum.innerHTML = `<div class="msg info">${problems.map(esc).join('<br>')}</div>` + warnings.map(w => `<div class="msg warn">${esc(w)}</div>`).join('');
+      $('generate').disabled = true;
+      return;
+    }
+    try {
+      const utxos = state.utxos.map(r => r.data);
+      state.plan = L.planTransaction({ chain: state.chain, utxos, dest: state.dest.value, amount: state.amount.value, change: state.change.value, rate: state.rate.value });
+    } catch (e) {
+      state.planError = e.message;
+      sum.innerHTML = `<div class="msg err">${esc(e.message)}</div>` + warnings.map(w => `<div class="msg warn">${esc(w)}</div>`).join('');
+      $('generate').disabled = true;
+      return;
+    }
+    const p = state.plan;
+    if (p.changeDropped) warnings.push(`Change would be below the dust limit, so no change output is created and ${fmt(p.fee)} sats go to the miner instead.`);
+    const protection = state.chain === 0
+      ? 'OP_RETURN output with an 84-byte payload (87-byte script). Invalid on the BLAKE2b chain under BIP-110, so this transaction cannot be replayed there.'
+      : 'Every input carries sighash ALL|UNIFIED (0x21). Sparrow (BLAKE2b build) signs with the unified message; those signatures are invalid on SHA256d, so this transaction cannot be replayed there. Standard Sparrow will refuse to open this file.';
+    const rows = [
+      ['Chain', `${CHAINS[state.chain].name} (Blake2B = ${state.chain})`],
+      ['Inputs', `${state.utxos.length} · ${fmt(p.total)} sats`],
+      ['Destination', `${fmt(state.amount.value)} sats → ${esc(state.dest.text.trim())}`],
+      ...(state.chain === 0 ? [['OP_RETURN', '0 sats · 84-byte payload']] : []),
+      ['Change', p.changeDropped ? 'none (below dust)' : `${fmt(p.changeValue)} sats → ${esc(state.change.text.trim())}`],
+      ['Estimated size', `${fmt(p.vsize)} vB`],
+      ['Fee', `${fmt(p.fee)} sats (${p.effectiveRate.toFixed(2)} sat/vB)`],
+      ['nLockTime', state.tip == null ? '0' : fmt(state.tip)],
+      ['Replay protection', protection],
+    ];
+    sum.innerHTML = `<table>${rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('')}</table>` + warnings.map(w => `<div class="msg warn">${esc(w)}</div>`).join('');
+    $('generate').disabled = false;
+  }
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  // ---------- generate ----------
+  function generate() {
+    if (!state.plan) return;
+    const utxos = state.utxos.map(r => r.data);
+    const res = L.assemble({ chain: state.chain, utxos, dest: state.dest.value, amount: state.amount.value, change: state.change.value, rate: state.rate.value, locktime: state.tip || 0 });
+    const name = `psbt-${CHAINS[state.chain].file}-${utxos[0].txid.slice(0, 8)}.psbt`;
+    state.result = { ...res, name };
+    $('psbtText').value = res.base64;
+    $('resultInfo').innerHTML = `<div class="msg info">${esc(name)} · ${res.psbt.length} bytes · ${res.tx.inputs.length} input(s), ${res.tx.outputs.length} output(s) · fee ${fmt(res.plan.fee)} sats · ${esc(CHAINS[state.chain].name)}</div>`;
+    $('resultSection').hidden = false;
+    $('resultSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  function hideResult() { state.result = null; $('resultSection').hidden = true; $('psbtText').value = ''; }
+  function download() {
+    if (!state.result) return;
+    const blob = new Blob([state.result.psbt], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = state.result.name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  async function copyBase64() {
+    if (!state.result) return;
+    try { await navigator.clipboard.writeText(state.result.base64); $('copy').textContent = 'Copied'; }
+    catch { $('psbtText').select(); document.execCommand('copy'); $('copy').textContent = 'Copied'; }
+    setTimeout(() => { $('copy').textContent = 'Copy base64'; }, 1500);
+  }
+
+  // ---------- wiring ----------
+  document.querySelectorAll('input[name=chain]').forEach(r => r.addEventListener('change', () => setChain(Number(r.value))));
+  $('explorer').addEventListener('change', () => { hideResult(); fetchChainData(); });
+  $('addUtxo').addEventListener('click', () => addUtxoRow().input.focus());
+  $('dest').addEventListener('input', () => validateAddress('dest'));
+  $('change').addEventListener('input', () => validateAddress('change'));
+  $('amount').addEventListener('input', validateAmount);
+  $('rate').addEventListener('input', () => validateRate(true));
+  $('resetRate').addEventListener('click', e => { e.preventDefault(); state.rate.userEdited = false; fetchChainData(); });
+  $('generate').addEventListener('click', generate);
+  $('download').addEventListener('click', download);
+  $('copy').addEventListener('click', copyBase64);
+  ['dest', 'change', 'amount', 'rate', 'explorer'].forEach(id => $(id).addEventListener('input', hideResult));
+  document.addEventListener('input', e => { if (e.target.closest && e.target.closest('#utxoList')) hideResult(); });
+
+  addUtxoRow();
+  validateAddress('dest'); validateAddress('change'); validateAmount();
+  detectProxy().then(() => setChain(0));
+})();
+</script>
+</body>
+</html>

@@ -14,7 +14,17 @@ everything else from a public block explorer, and produces a file that Sparrow W
 
 ## Running it
 
-Either open `index.html` directly in a browser, or run:
+**No install at all:** the page is hosted from this repository by GitHub Pages at
+
+<https://cwhorton.github.io/psbtgenerator/>
+
+Open that URL and use it as is. It works with any explorer that allows browser
+requests (CORS), which includes `mempool.space` for Bitcoin and
+`mempool.kilombino.com` for the BLAKE2b chain. If you do not want to depend on a
+mempool instance that lacks CORS support, such as `mempool.guide`, this is the
+simplest option: no Python, no local server.
+
+Otherwise, either open `index.html` directly in a browser, or run:
 
 ```bash
 python3 serve.py
